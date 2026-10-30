@@ -63,7 +63,12 @@ button { cursor:pointer; }
 }
 .brand:hover .brand-icon { transform:rotate(360deg) scale(1.4); }
 .brand-name { font-size:26px; font-weight:200; letter-spacing:.26em; line-height:1; }
-.top-actions { display:flex; gap:10px; }
+.top-actions { display:flex; gap:10px; align-items:center; }
+.me {
+  margin-right:6px; padding:4px 0; border:0; background:none; color:var(--muted);
+  font-size:11px; letter-spacing:.12em; transition:color .25s;
+}
+.me:hover { color:#fff; }
 .chip {
   padding:7px 16px; border:1px solid rgba(255,255,255,.26); border-radius:999px;
   background:rgba(255,255,255,.04); font-size:11px; letter-spacing:.16em;
@@ -85,17 +90,19 @@ button { cursor:pointer; }
   animation:slide-l 1.1s var(--spring) .12s both;
 }
 .tabs {
-  position:relative; display:grid; grid-template-columns:1fr 1fr; padding:3px; margin-bottom:14px;
+  position:relative; display:grid; grid-template-columns:repeat(4, 1fr); padding:3px; margin-bottom:14px;
   border:1px solid var(--line); border-radius:999px;
 }
 .tab-ind {
-  position:absolute; top:3px; bottom:3px; left:3px; width:calc(50% - 3px); border-radius:999px;
+  position:absolute; top:3px; bottom:3px; left:3px; width:calc(25% - 1.5px); border-radius:999px;
   background:rgba(255,255,255,.93); transition:transform .7s var(--spring);
 }
-.tabs[data-active="playlists"] .tab-ind { transform:translateX(100%); }
+.tabs[data-active="saved"] .tab-ind { transform:translateX(100%); }
+.tabs[data-active="recent"] .tab-ind { transform:translateX(200%); }
+.tabs[data-active="playlists"] .tab-ind { transform:translateX(300%); }
 .tab {
   position:relative; z-index:1; padding:8px 0; border:0; background:none;
-  font-size:11px; letter-spacing:.2em; color:var(--muted); transition:color .3s;
+  font-size:10px; letter-spacing:.1em; color:var(--muted); transition:color .3s;
 }
 .tab:hover { color:#fff; }
 .tab.active { color:#111; font-weight:500; }
@@ -159,6 +166,8 @@ input[type="search"]:focus,input[type="text"]:focus {
   transition:transform .5s var(--spring);
 }
 .item:hover .ph { transform:rotate(-12deg) scale(1.12); }
+.ph img.cover { width:100%; height:100%; border-radius:50%; object-fit:cover; animation:pop .5s var(--spring) both; }
+.ph.has-art { border-color:transparent; }
 .ph.dance { border:0; overflow:visible; }
 .ph.dance img {
   position:absolute; left:50%; bottom:-2px; height:58px; width:auto; translate:-50% 0;
@@ -176,7 +185,16 @@ input[type="search"]:focus,input[type="text"]:focus {
 }
 .actions button:hover { transform:scale(1.35) rotate(-10deg); background:rgba(255,255,255,.18); }
 .actions button:active { transform:scale(.8); }
-.pl-row { display:grid; grid-template-columns:1fr auto; gap:8px; align-items:center; padding:6px; border-radius:16px;
+.actions button.on { color:var(--accent); }
+.pl-cover {
+  width:48px; height:48px; border-radius:12px; overflow:hidden; cursor:pointer; display:grid; place-items:center;
+  border:1px solid rgba(255,255,255,.2); color:var(--muted); background:rgba(255,255,255,.04);
+  transition:transform .5s var(--spring);
+}
+.pl-cover img { width:100%; height:100%; object-fit:cover; display:block; animation:pop .5s var(--spring) both; }
+.pl-cover.mosaic { grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; }
+.pl-row:hover .pl-cover { transform:rotate(-6deg) scale(1.08); }
+.pl-row { display:grid; grid-template-columns:48px minmax(0,1fr) auto; gap:8px; align-items:center; padding:6px; border-radius:16px;
   animation:item-in .75s var(--spring) backwards; animation-delay:calc(min(var(--i,0), 14) * 55ms);
   transition:translate .45s var(--spring), background .25s; }
 .pl-row:hover { translate:6px 0; background:rgba(255,255,255,.07); }
@@ -199,6 +217,62 @@ input[type="search"]:focus,input[type="text"]:focus {
 .look { margin-top:auto; padding-top:10px; border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .alpha { display:flex; align-items:center; gap:9px; color:var(--muted); font-size:11px; letter-spacing:.1em; }
 .alpha input { width:90px; }
+
+/* ---------- palco central: letra ou capa girando ---------- */
+.stage {
+  /* simétrico ao painel da esquerda: fica centralizado na janela, com ou sem a fila aberta */
+  position:fixed; top:68px; bottom:116px; left:428px; right:428px; z-index:5;
+  display:grid; place-items:center; pointer-events:none;
+  transition:opacity .35s;
+}
+.stage-art {
+  width:min(46vh, 78%); aspect-ratio:1; border-radius:50%; object-fit:cover;
+  box-shadow:0 0 0 1px rgba(255,255,255,.25), 0 30px 90px rgba(0,0,0,.55);
+  animation:pop .8s var(--spring) both;
+}
+.stage-art.spin { animation:spin 24s linear infinite; }
+.stage.loading .stage-art { animation:breathe 1.6s ease-in-out infinite; }
+.stage-status {
+  position:absolute; left:0; right:0; bottom:6%; margin:0; text-align:center;
+  font-size:13px; letter-spacing:.08em; color:var(--text);
+  text-shadow:0 2px 14px rgba(0,0,0,.9);
+}
+@keyframes breathe { 0%,100% { scale:.94; opacity:.55; } 50% { scale:1; opacity:1; } }
+.lyrics {
+  list-style:none; margin:0; padding:38vh 8px; width:100%; max-height:100%; overflow-y:auto;
+  text-align:center; pointer-events:auto; scrollbar-width:none;
+  -webkit-mask-image:linear-gradient(transparent, #000 22%, #000 78%, transparent);
+  mask-image:linear-gradient(transparent, #000 22%, #000 78%, transparent);
+}
+.lyrics::-webkit-scrollbar { display:none; }
+.lyrics li {
+  padding:9px 12px; font-size:22px; font-weight:300; line-height:1.35; color:rgba(244,246,243,.45);
+  text-shadow:0 2px 16px rgba(0,0,0,.9), 0 0 4px rgba(0,0,0,.6);
+  cursor:pointer; transition:color .4s, transform .6s var(--spring);
+}
+.lyrics li:hover { color:rgba(244,246,243,.7); }
+.lyrics li.on { color:#fff; font-weight:400; transform:scale(1.08); }
+.lyrics.plain { padding:20px 8px; }
+.lyrics.plain li { cursor:default; font-size:17px; color:rgba(244,246,243,.75); }
+/* janela estreita: sem espaço para simetria, usa até a borda; com a fila aberta, esconde */
+@media (max-width:1180px) {
+  .stage { right:24px; }
+  body.queue-open .stage { opacity:0; }
+}
+
+/* ---------- jam ---------- */
+.jam-panel, .jam-card {
+  position:fixed; right:24px; top:68px; z-index:30; width:min(320px, calc(100% - 48px)); padding:16px 18px 12px;
+  animation:pop .5s var(--spring) both;
+}
+.jam-panel h2 { margin:0 0 4px; font-size:19px; font-weight:200; letter-spacing:.22em; }
+.jam-panel .hint { margin:4px 0 12px; }
+.jam-guests { list-style:none; margin:0 0 10px; padding:0; }
+.jam-guests li { display:flex; justify-content:space-between; padding:6px 2px; border-bottom:1px solid var(--line); }
+.jam-guests li span { color:var(--muted); font-size:11px; }
+.jam-card { top:auto; bottom:116px; }
+.jam-card p { margin:0 0 10px; line-height:1.5; }
+.chip.on { border-color:var(--accent); color:var(--accent); }
 
 /* ---------- fila (gaveta) ---------- */
 .drawer {

@@ -74,13 +74,13 @@ function saveSettings(s) {
 }
 
 // ---------- chamadas à API do slskd (feitas aqui para a chave não ir para a interface) ----------
-const ALLOWED_PATH = /^\/(searches|transfers\/downloads|application)(\/|\?|$)/;
+const ALLOWED_PATH = /^\/(searches|transfers\/downloads|application|conversations)(\/|\?|$)/;
 
 async function slskRequest({ method, path: apiPath, body }) {
   if (typeof apiPath !== 'string' || !ALLOWED_PATH.test(apiPath) || apiPath.includes('..')) {
     return { ok: false, status: 0, error: 'Caminho da API não permitido.' };
   }
-  const m = ['GET', 'POST', 'DELETE'].includes(method) ? method : 'GET';
+  const m = ['GET', 'POST', 'PUT', 'DELETE'].includes(method) ? method : 'GET';
   const headers = { 'X-API-Key': settings.key };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   try {
@@ -107,6 +107,16 @@ async function slskRequest({ method, path: apiPath, body }) {
 const foundCache = new Map();
 const baseName = (p) => String(p).split(/[\\/]/).pop();
 
+function walkFiles(dir, fn, depth = 0) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) { if (depth < 6) walkFiles(full, fn, depth + 1); }
+    else fn(full, e.name);
+  }
+}
+
 function findLocal(track) {
   const key = track.username + '|' + track.filename;
   const cached = foundCache.get(key);
@@ -115,24 +125,209 @@ function findLocal(track) {
   const want = baseName(track.filename).toLowerCase();
   let best = null;
   let bestTime = 0;
-  const walk = (dir, depth) => {
-    let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) {
-        if (depth < 6) walk(full, depth + 1);
-      } else if (e.name.toLowerCase() === want) {
-        try {
-          const st = fs.statSync(full);
-          if ((!track.size || st.size === track.size) && st.mtimeMs > bestTime) { best = full; bestTime = st.mtimeMs; }
-        } catch {}
-      }
-    }
-  };
-  walk(settings.downloadsDir, 0);
+  walkFiles(settings.downloadsDir, (full, name) => {
+    if (name.toLowerCase() !== want) return;
+    try {
+      const st = fs.statSync(full);
+      if ((!track.size || st.size === track.size) && st.mtimeMs > bestTime) { best = full; bestTime = st.mtimeMs; }
+    } catch {}
+  });
   if (best) foundCache.set(key, best);
   return best;
+}
+
+// ---------- cache: o que só foi ouvido some sozinho; salvas (♥) e de playlists ficam ----------
+const CACHE_LIMIT = 5 * 1024 ** 3;
+
+function pruneCache(keep) {
+  const keepSet = new Set((Array.isArray(keep) ? keep : []).map((t) => baseName(t.filename).toLowerCase() + '|' + t.size));
+  const files = [];
+  let total = 0;
+  walkFiles(settings.downloadsDir, (full, name) => {
+    try {
+      const st = fs.statSync(full);
+      if (keepSet.has(name.toLowerCase() + '|' + st.size)) return; // salvas não contam no limite
+      files.push({ full, size: st.size, t: st.mtimeMs });
+      total += st.size;
+    } catch {}
+  });
+  files.sort((a, b) => a.t - b.t); // ouvidas há mais tempo saem primeiro (o play atualiza a data)
+  for (const f of files) {
+    if (total <= CACHE_LIMIT) break;
+    try { fs.unlinkSync(f.full); total -= f.size; } catch {}
+  }
+}
+
+// ---------- tags e capa embutida do FLAC (artista/título limpos para letra e capa) ----------
+function flacMeta(file) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const head = Buffer.alloc(4);
+    fs.readSync(fd, head, 0, 4, 0);
+    if (head.toString('latin1') !== 'fLaC') return null;
+    const out = {};
+    let pos = 4;
+    for (let last = false; !last;) {
+      const h = Buffer.alloc(4);
+      if (fs.readSync(fd, h, 0, 4, pos) < 4) break;
+      last = (h[0] & 0x80) !== 0;
+      const type = h[0] & 0x7f;
+      const len = h.readUIntBE(1, 3);
+      pos += 4;
+      if (type === 4 || (type === 6 && !out.picture)) {
+        const b = Buffer.alloc(len);
+        fs.readSync(fd, b, 0, len, pos);
+        if (type === 4) { // VORBIS_COMMENT (comprimentos little-endian)
+          let o = 4 + b.readUInt32LE(0);
+          const n = b.readUInt32LE(o); o += 4;
+          for (let i = 0; i < n; i++) {
+            const l = b.readUInt32LE(o); o += 4;
+            const s = b.toString('utf8', o, o + l); o += l;
+            const k = s.slice(0, s.indexOf('=')).toLowerCase();
+            if (['artist', 'title', 'album'].includes(k) && !out[k]) out[k] = s.slice(k.length + 1);
+          }
+        } else { // PICTURE (big-endian)
+          let o = 4;
+          const ml = b.readUInt32BE(o); o += 4;
+          const mime = b.toString('latin1', o, o + ml); o += ml;
+          o += 4 + b.readUInt32BE(o) + 16; // descrição + largura/altura/profundidade/cores
+          const pl = b.readUInt32BE(o); o += 4;
+          out.picture = 'data:' + (mime || 'image/jpeg') + ';base64,' + b.subarray(o, o + pl).toString('base64');
+        }
+      }
+      pos += len;
+    }
+    return out;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+// ---------- capa pelo Deezer (sem chave) ----------
+const artCache = new Map();
+async function artLookup(query) {
+  const q = String(query || '').trim().slice(0, 200);
+  if (!q) return null;
+  if (artCache.has(q)) return artCache.get(q);
+  let art = null;
+  try {
+    const r = await fetch('https://api.deezer.com/search?limit=1&q=' + encodeURIComponent(q), { signal: AbortSignal.timeout(10000) });
+    const hit = r.ok && (await r.json()).data?.[0];
+    if (hit && hit.album) {
+      art = { s: hit.album.cover_medium, l: hit.album.cover_xl, artist: hit.artist && hit.artist.name, title: hit.title };
+    }
+  } catch {
+    return null; // falha de rede não entra no cache
+  }
+  artCache.set(q, art);
+  return art;
+}
+
+// ---------- letras pelo LRCLIB (sem chave), com cache em disco ----------
+const LRCLIB = 'https://lrclib.net/api/';
+const lyricsDir = () => path.join(app.getPath('userData'), 'lyrics');
+const looseKey = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+
+async function lrclib(pathAndQuery) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const r = await fetch(LRCLIB + pathAndQuery, {
+        headers: { 'User-Agent': 'Roxy (https://github.com/fernandovmc/roxy-soulseek)' }, signal: AbortSignal.timeout(8000)
+      });
+      if (r.status === 404) return { found: false };
+      if (r.ok) return { found: true, data: await r.json() };
+    } catch {}
+    await sleep(1500 * (attempt + 1)); // o LRCLIB às vezes responde 503 (sobrecarga)
+  }
+  return null; // indisponível: não grava no cache
+}
+
+function parseLrc(text) {
+  const lines = [];
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const m = raw.match(/^\[(\d+):(\d+(?:\.\d+)?)\](.*)$/);
+    if (m) lines.push({ t: Math.round((+m[1] * 60 + +m[2]) * 1000), text: m[3].trim() });
+  }
+  return lines.length ? lines : null;
+}
+
+// LRCLIB: { synced, plain } | false (não tem) | null (fora do ar)
+async function fromLrclib(artist, title, sec) {
+  const q = new URLSearchParams({ artist_name: artist, track_name: title });
+  if (sec) {
+    const r = await lrclib('get?' + q + '&duration=' + sec);
+    if (!r) return null;
+    if (r.found) return r.data.instrumental ? false : { synced: parseLrc(r.data.syncedLyrics), plain: r.data.plainLyrics || null };
+  }
+  const r = await lrclib('search?' + q);
+  if (!r) return null;
+  const list = (r.found && Array.isArray(r.data) ? r.data : [])
+    .filter((x) => !x.instrumental && (!sec || !x.duration || Math.abs(x.duration - sec) <= 4));
+  const rec = list.find((x) => x.syncedLyrics) || list.find((x) => x.plainLyrics);
+  return rec ? { synced: parseLrc(rec.syncedLyrics), plain: rec.plainLyrics || null } : false;
+}
+
+// NetEase Music (API pública, reserva quando o LRCLIB está fora ou não tem): mesmo formato de retorno.
+async function fromNetease(artist, title, sec) {
+  const headers = { 'User-Agent': 'Mozilla/5.0', Referer: 'https://music.163.com/' };
+  try {
+    const s = await (await fetch('https://music.163.com/api/search/get?type=1&limit=10&s=' +
+      encodeURIComponent(artist + ' ' + title), { headers, signal: AbortSignal.timeout(8000) })).json();
+    const a = looseKey(artist).split(' ')[0];
+    const hit = ((s.result && s.result.songs) || []).find((x) =>
+      looseKey(x.name).includes(looseKey(title)) &&
+      (x.artists || []).some((y) => looseKey(y.name).includes(a)) &&
+      (!sec || !x.duration || Math.abs(x.duration / 1000 - sec) <= 4));
+    if (!hit) return false;
+    const l = await (await fetch('https://music.163.com/api/song/lyric?lv=1&id=' + hit.id,
+      { headers, signal: AbortSignal.timeout(8000) })).json();
+    // tira as linhas de crédito ("作词 : ...", "作曲 : ...")
+    const lrc = String((l.lrc && l.lrc.lyric) || '').split('\n').filter((x) => !/[\u4e00-\u9fff]+\s*[:：]/.test(x)).join('\n');
+    const synced = parseLrc(lrc);
+    return synced ? { synced, plain: null } : false;
+  } catch {
+    return null;
+  }
+}
+
+async function lyricsFor({ artist, title, duration }) {
+  if (!artist || !title) return null;
+  const sec = duration ? Math.round(duration / 1000) : 0;
+  const key = crypto.createHash('sha1').update(looseKey(artist) + '|' + looseKey(title) + '|' + sec).digest('hex');
+  const file = path.join(lyricsDir(), key + '.json');
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+
+  const a = await fromLrclib(artist, title, sec);
+  const b = a && a.synced ? null : await fromNetease(artist, title, sec);
+  const out = (b && b.synced ? b : a) || null;
+  // grava "sem letra" só quando as duas fontes responderam; se alguma estava fora, tenta de novo depois
+  if (!out && (a === null || b === null)) return null;
+  const save = out || { synced: null, plain: null };
+  try { fs.mkdirSync(lyricsDir(), { recursive: true }); fs.writeFileSync(file, JSON.stringify(save)); } catch {}
+  return save;
+}
+
+// ---------- playlist/álbum público do Spotify pelo link (sem login) ----------
+async function spotifyPublic(link) {
+  const m = String(link || '').match(/(playlist|album)[/:]([A-Za-z0-9]{22})/);
+  if (!m) throw new Error('Cole o link de uma playlist ou álbum do Spotify.');
+  const r = await fetch('https://open.spotify.com/embed/' + m[1] + '/' + m[2], {
+    headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(20000)
+  });
+  if (!r.ok) throw new Error('O Spotify não abriu esse link (erro ' + r.status + '). Ele é público?');
+  const j = (await r.text()).match(/<script id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/s);
+  let e = null;
+  try { e = JSON.parse(j[1]).props.pageProps.state.data.entity; } catch {}
+  if (!e || !Array.isArray(e.trackList)) throw new Error('Não consegui ler esse link. A playlist é pública?');
+  // Limite conhecido: a página de embed traz no máximo 100 faixas; para mais, use o import com login.
+  const tracks = e.trackList.filter((t) => t && t.title).map((t) => ({
+    id: String(t.uri || '').split(':').pop() || t.title, title: t.title, artist: t.subtitle || '', duration: t.duration || undefined
+  }));
+  const cover = (e.coverArt && e.coverArt.sources && e.coverArt.sources[0] && e.coverArt.sources[0].url) || null;
+  return { playlists: [{ name: e.name || e.title || 'Spotify', cover, tracks }], skipped: [], capped: tracks.length >= 100 };
 }
 
 // ---------- imagem de fundo ----------
@@ -413,6 +608,7 @@ function toSlimTrack(t) {
 }
 
 let spotifyToken_ = null;
+const spotifyCovers = new Map(); // id da playlist -> capa, guardado na listagem para o import
 const LIKED_ID = '__liked__';
 
 // Passo 1: login e lista das playlists disponíveis (sem baixar as faixas ainda).
@@ -433,11 +629,13 @@ async function spotifyList(send) {
     name: p.name,
     total: (p.items && p.items.total) ?? (p.tracks && p.tracks.total) ?? null,
     isPublic: p.public === true,
+    cover: (p.images && p.images[0] && p.images[0].url) || null,
     owner: (p.owner && (p.owner.display_name || p.owner.id)) || ''
   }));
 
   const liked = await spotifyGet(spotifyToken_, 'https://api.spotify.com/v1/me/tracks?limit=1');
   if (liked.ok) playlists.unshift({ id: LIKED_ID, name: 'Músicas curtidas', total: liked.data.total ?? null, isPublic: false, owner: '' });
+  playlists.forEach((p) => { if (p.cover) spotifyCovers.set(p.id, p.cover); });
   return { playlists };
 }
 
@@ -463,7 +661,7 @@ async function spotifyFetch(ids, nameById, send) {
     if (r.status === 401) { spotifyToken_ = null; throw new Error('A sessão do Spotify expirou. Clique em importar de novo.'); }
     if (!r.ok) { skipped.push(name); continue; }
     const tracks = r.items.map((it) => toSlimTrack(it && (it.item || it.track))).filter(Boolean);
-    if (tracks.length) out.push({ name, tracks });
+    if (tracks.length) out.push({ name, cover: spotifyCovers.get(id) || null, tracks });
   }
   return { playlists: out, skipped };
 }
@@ -503,7 +701,7 @@ function createLoginWindow() {
 
 function createWindow() {
   mainWin = baseWindow({
-    width: 1080, height: 720, minWidth: 820, minHeight: 560,
+    width: 1280, height: 760, minWidth: 820, minHeight: 560,
     backgroundColor: '#0c1210'
   });
   mainWin.on('closed', () => { mainWin = null; });
@@ -561,8 +759,19 @@ app.whenReady().then(() => {
   ipcMain.handle('slsk:request', (_e, req) => slskRequest(req || {}));
   ipcMain.handle('slsk:find', (_e, track) => {
     const f = findLocal(track || {});
+    if (f) { try { const now = new Date(); fs.utimesSync(f, now, now); } catch {} }
     return f ? pathToFileURL(f).href : null;
   });
+  ipcMain.handle('cache:prune', (_e, keep) => pruneCache(keep));
+  ipcMain.handle('track:meta', (_e, track) => {
+    if (!track || !track.filename) return null;
+    const f = findLocal(track);
+    return f && /\.flac$/i.test(f) ? flacMeta(f) : null;
+  });
+  ipcMain.handle('art:lookup', (_e, query) => artLookup(query));
+  ipcMain.handle('lyrics:get', (_e, req) => lyricsFor(req || {}));
+  ipcMain.handle('spotify:public', (_e, link) =>
+    spotifyGuard(() => spotifyPublic(link)));
   ipcMain.handle('slsk:pickFolder', async () => {
     const r = await dialog.showOpenDialog({ title: 'Pasta de downloads do slskd', properties: ['openDirectory'] });
     return r.canceled ? null : r.filePaths[0];

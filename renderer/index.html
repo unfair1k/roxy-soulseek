@@ -15,16 +15,26 @@
       <span class="brand-name">Roxy</span>
     </div>
     <div class="top-actions">
+      <button id="me" class="me" type="button" title="Seu usuário do Soulseek (clique para copiar)" hidden></button>
+      <button id="btn-jam" class="chip" type="button" aria-expanded="false">Jam</button>
       <button id="btn-queue" class="chip" type="button">Fila <b id="queue-count">0</b></button>
       <button id="btn-logout" class="chip" type="button">Sair</button>
     </div>
   </header>
 
   <main>
+    <section id="stage" class="stage" aria-label="Letra" hidden>
+      <img id="stage-art" class="stage-art" alt="" hidden>
+      <p id="stage-status" class="stage-status" role="status" hidden></p>
+      <ol id="lyrics" class="lyrics" hidden></ol>
+    </section>
+
     <section class="lib glass">
       <div class="tabs" data-active="search" role="tablist">
         <span class="tab-ind"></span>
         <button class="tab active" data-tab="search" role="tab">Buscar</button>
+        <button class="tab" data-tab="saved" role="tab">Músicas</button>
+        <button class="tab" data-tab="recent" role="tab">Recentes</button>
         <button class="tab" data-tab="playlists" role="tab">Playlists</button>
       </div>
 
@@ -37,15 +47,32 @@
         <ul id="results" class="list"></ul>
       </div>
 
+      <div id="tab-saved" class="tab-body" hidden>
+        <ul id="saved-list" class="list"></ul>
+        <p id="saved-empty" class="empty">Nada salvo ainda. Toque ♡ numa música para guardá-la aqui; o resto fica num cache que se limpa sozinho.</p>
+      </div>
+
+      <div id="tab-recent" class="tab-body" hidden>
+        <div class="row-actions">
+          <button id="btn-recent-clear" class="link" type="button">Limpar</button>
+        </div>
+        <ul id="recent-list" class="list"></ul>
+        <p id="recent-empty" class="empty">As músicas que você ouvir aparecem aqui.</p>
+      </div>
+
       <div id="tab-playlists" class="tab-body" hidden>
         <div id="pl-home" class="pl-home">
           <div class="field">
             <input id="pl-name" type="text" placeholder="Nome da nova playlist" autocomplete="off">
             <button id="btn-pl-create" class="primary">Criar</button>
           </div>
+          <div class="field">
+            <input id="sp-link" type="text" placeholder="Link de playlist ou álbum do Spotify" autocomplete="off">
+            <button id="btn-sp-link" class="primary">Importar</button>
+          </div>
           <div class="row-actions">
             <button id="btn-pl-from-queue" class="link">Salvar a fila</button>
-            <button id="btn-pl-spotify" class="primary small">Importar do Spotify</button>
+            <button id="btn-pl-spotify" class="primary small">Minhas playlists do Spotify</button>
           </div>
           <p id="pl-spotify-status" class="hint" hidden></p>
           <div id="sp-picker" class="sp-picker" hidden>
@@ -116,10 +143,30 @@
     </div>
   </footer>
 
+  <section id="jam-panel" class="jam-panel glass" aria-label="Jam" hidden>
+    <h2>Jam</h2>
+    <p id="jam-text" class="hint"></p>
+    <ul id="jam-guests" class="jam-guests"></ul>
+    <div id="jam-invite-row" class="field">
+      <input id="jam-user" type="text" placeholder="Usuário do Soulseek" autocomplete="off">
+      <button id="btn-jam-invite" class="primary small" type="button">Convidar</button>
+    </div>
+    <button id="btn-jam-leave" class="link" type="button" hidden></button>
+  </section>
+
+  <div id="jam-card" class="jam-card glass" role="alertdialog" aria-live="polite" hidden>
+    <p id="jam-card-text"></p>
+    <div class="pl-actions">
+      <button id="btn-jam-accept" class="primary small" type="button">Entrar</button>
+      <button id="btn-jam-decline" class="link" type="button">Recusar</button>
+    </div>
+  </div>
+
   <div id="toast" class="toast" role="status" hidden></div>
   <audio id="audio" preload="auto"></audio>
 
   <script src="providers/soulseek.js"></script>
+  <script src="jam.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

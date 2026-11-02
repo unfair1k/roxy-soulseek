@@ -160,7 +160,7 @@ A jam lets other Roxy users listen to what you play, at the same position. There
 
 ### Joining
 
-When someone invites you, a card appears at the bottom of the window. Click **Entrar** to join or **Recusar** to decline. While you are in a jam, Roxy plays the host's track, prefetches the next ones, follows play and pause, and corrects the position when it drifts more than 2 seconds. **Sair da jam** leaves the session.
+When someone invites you, a card appears at the bottom of the window. Click **Entrar** to join or **Recusar** to decline. While you are in a jam, Roxy plays the host's track, prefetches the next ones, follows play and pause, and corrects the position when it drifts more than 2 seconds. Control goes both ways: a guest can also change the track, pause or seek, and the host applies it and relays it to everyone else. Both sides need this version of Roxy. **Sair da jam** leaves the session.
 
 ### How it works and limitations
 

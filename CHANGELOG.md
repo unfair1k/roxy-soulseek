@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Jam: guests can now change the track, pause and seek too. The host applies the guest's command and relays it to the other guests.
 - Search results are grouped into one row per song and ranked by relevance and popularity. Alternate versions (live, remix, acoustic, karaoke, covers, tributes) rank lower unless the query asks for them.
 - The search detail line shows bit depth and sample rate (for example `FLAC 24/96`) and the number of peers sharing each song.
 - Download race: a track is requested from up to three peers with the same format and resolution, and the first completed download is played.
@@ -44,3 +45,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [0.4.0]
 
 - Baseline release imported from the original repository.
+

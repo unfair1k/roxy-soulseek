@@ -1,6 +1,8 @@
 // Jam: ouvir junto com outros usuários do Roxy. Os comandos viajam como mensagens privadas do
 // Soulseek (via slskd), com um prefixo próprio; só essas mensagens são lidas e marcadas como lidas.
-// O anfitrião manda o estado (faixa, posição, tocando) e cada convidado baixa o mesmo arquivo e se ajusta.
+// O estado (faixa, posição, tocando) vai nos dois sentidos: o anfitrião manda para os convidados e
+// qualquer convidado pode mandar para o anfitrião, que aplica e repassa para os demais.
+// Cada um baixa o mesmo arquivo e se ajusta.
 const JAM_PREFIX = 'ROXYJAM1 ';
 const JAM_POLL_MS = 2000;
 const JAM_MAX_LATENCY = 10000; // relógios diferentes não podem empurrar a posição mais que isso
@@ -60,10 +62,10 @@ class Jam {
     this.on('changed');
   }
 
-  broadcast(state) {
+  broadcast(state, except) {
     if (this.role !== 'host') return;
     for (const [user, st] of this.guests) {
-      if (st === 'joined') this.send(user, { t: 'state', id: this.id, ...state }).catch(() => {});
+      if (st === 'joined' && user !== except) this.send(user, { t: 'state', id: this.id, ...state }).catch(() => {});
     }
   }
 
@@ -75,6 +77,12 @@ class Jam {
     this.id = id;
     await this.send(host, { t: 'join', id });
     this.on('changed');
+  }
+
+  // convidado: um comando seu (trocar faixa, pausar, pular posição) vai para o anfitrião
+  sendState(state) {
+    if (this.role !== 'guest') return Promise.resolve();
+    return this.send(this.host, { t: 'state', id: this.id, ...state });
   }
 
   decline(host, id) {
@@ -118,6 +126,7 @@ class Jam {
     if (this.role === 'host' && m.id === this.id && this.guests.has(user)) {
       if (m.t === 'join') { this.guests.set(user, 'joined'); this.on('changed'); this.on('joined', user); }
       if (m.t === 'leave' || m.t === 'decline') { this.guests.delete(user); this.on('changed'); this.on('left', user, m.t); }
+      if (m.t === 'state' && this.guests.get(user) === 'joined') this.on('cmd', user, m); // comando de um convidado
       return;
     }
     if (this.role === 'guest' && user === this.host && m.id === this.id) {
@@ -130,3 +139,4 @@ class Jam {
 window.Jam = Jam;
 window.jamTarget = jamTarget;
 window.jamParse = jamParse;
+

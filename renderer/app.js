@@ -436,7 +436,7 @@ Object.values(providers).forEach((p) => {
     if (currentProvider() !== p) return;
     state.playing = v;
     renderPlayButton();
-    if (!state.loading) jamSync(); // anfitrião: play/pause vai para a jam
+    if (!state.loading) jamPush(); // play/pause vai para a jam
   });
   p.on('progress', (pos, dur) => {
     if (currentProvider() !== p) return;
@@ -449,7 +449,7 @@ Object.values(providers).forEach((p) => {
     $('time-dur').textContent = fmt(state.duration);
     syncLyrics(pos);
   });
-  p.on('end', () => { if (currentProvider() === p) next(); });
+  p.on('end', () => { if (currentProvider() === p) { jamAutoIndex = state.index + 1; next(); } });
   p.on('error', (msg) => toast(msg));
 });
 
@@ -475,7 +475,7 @@ $('seek').addEventListener('input', () => {
 $('seek').addEventListener('change', () => {
   const p = currentProvider();
   if (p && state.duration) p.seek((Number($('seek').value) / 1000) * state.duration);
-  setTimeout(jamSync, 300); // depois do seek aplicar
+  setTimeout(jamPush, 300); // depois do seek aplicar
   state.seeking = false;
 });
 
@@ -910,6 +910,11 @@ const jam = new Jam((evt, ...a) => onJam(evt, ...a));
 const JAM_HEARTBEAT_MS = 15000;
 let jamPending = null; // convidado: estado do anfitrião esperando a faixa terminar de baixar
 let jamInvite = null;  // convite recebido: { host, id }
+let jamMuteUntil = 0;       // logo depois de aplicar um estado remoto, não devolve o eco
+let jamIgnoreHostUntil = 0; // convidado: depois de mandar um comando, ignora estados do anfitrião que já estavam a caminho
+let jamAutoIndex = -1;      // faixa que começou sozinha (a anterior acabou): cada lado avança por conta própria
+const JAM_MUTE_MS = 1500;
+const JAM_LOCAL_WINDOW = 6000;
 
 function jamSnapshot() {
   const t = currentTrack();
@@ -922,6 +927,14 @@ function jamSnapshot() {
   };
 }
 const jamSync = () => { if (jam.role === 'host') jam.broadcast(jamSnapshot()); };
+
+// qualquer mudança feita aqui: anfitrião avisa os convidados; convidado avisa o anfitrião
+function jamPush() {
+  if (!jam.role || jamPending || Date.now() < jamMuteUntil) return;
+  if (jam.role === 'host') return jamSync();
+  jamIgnoreHostUntil = Date.now() + JAM_LOCAL_WINDOW;
+  jam.sendState(jamSnapshot()).catch(() => {});
+}
 setInterval(() => { if (jam.role === 'host' && currentTrack()) jamSync(); }, JAM_HEARTBEAT_MS);
 
 // convidado: entra na faixa do anfitrião e se alinha à posição dele
@@ -940,6 +953,7 @@ function jamApply(s) {
 function jamAlign(s) {
   const p = currentProvider();
   if (!p) return;
+  jamMuteUntil = Date.now() + JAM_MUTE_MS;
   const want = jamTarget(s);
   if (Math.abs($('audio').currentTime * 1000 - want) > JAM_DRIFT_MS) p.seek(want);
   if (s.playing && $('audio').paused) p.resume();
@@ -948,11 +962,19 @@ function jamAlign(s) {
 
 // chamado quando uma faixa começa a tocar
 function jamOnPlay(track) {
-  if (jam.role === 'host') jamSync();
-  if (jam.role === 'guest' && jamPending && trackKey(jamPending.track) === trackKey(track)) {
-    jamAlign(jamPending); // a posição conta o tempo que o download levou
+  const auto = state.index === jamAutoIndex;
+  jamAutoIndex = -1;
+  if (jamPending && trackKey(jamPending.track) === trackKey(track)) {
+    const s = jamPending;
     jamPending = null;
+    jamAlign(s); // a posição conta o tempo que o download levou
+    // anfitrião que aplicou o comando de um convidado repassa para os outros
+    if (jam.role === 'host' && s.from) jam.broadcast(jamSnapshot(), s.from);
+    return;
   }
+  jamPending = null; // o usuário tocou outra coisa: o estado pendente ficou velho
+  if (auto) return; // a faixa seguinte começou sozinha: os dois lados já avançam
+  jamPush();
 }
 
 function renderJam() {
@@ -966,9 +988,9 @@ function renderJam() {
     ul.append(el('li', {}, user, el('span', {}, st === 'joined' ? 'na jam' : 'convidado')));
   }
   $('jam-text').textContent = jam.role === 'guest'
-    ? 'Você está na jam de ' + jam.host + '. O que tocar lá toca aqui, na mesma posição (com 1 a 2 segundos de diferença).'
+    ? 'Você está na jam de ' + jam.host + '. O que tocar lá toca aqui, na mesma posição (com 1 a 2 segundos de diferença). Você também pode trocar a música, pausar ou avançar: vale para os dois.'
     : jam.role === 'host'
-      ? 'Você é o anfitrião: o que você tocar toca para quem entrou. Cada um baixa o mesmo arquivo.'
+      ? 'Você é o anfitrião: o que você tocar toca para quem entrou, e quem entrou também pode trocar a música. Cada um baixa o mesmo arquivo.'
       : 'Ouça junto com quem também usa o Roxy. O convite chega por mensagem privada do Soulseek.';
   $('jam-invite-row').hidden = jam.role === 'guest';
   $('btn-jam-leave').hidden = !jam.role;
@@ -986,7 +1008,15 @@ function onJam(evt, user, arg) {
   if (evt === 'joined') { toast(user + ' entrou na jam.', 3000, 'ok'); return jamSync(); }
   if (evt === 'left') return toast(user + (arg === 'decline' ? ' recusou o convite.' : ' saiu da jam.'), 3000, 'ok');
   if (evt === 'ended') return toast(user + ' encerrou a jam.', 3500, 'ok');
-  if (evt === 'state') return jamApply(user);
+  if (evt === 'state') {
+    if (Date.now() < jamIgnoreHostUntil) return; // acabei de mandar um comando; esse estado é anterior a ele
+    return jamApply(user);
+  }
+  if (evt === 'cmd') { // anfitrião: um convidado trocou a faixa, pausou ou pulou posição
+    const s = { ...arg, from: user };
+    jamApply(s);
+    if (!jamPending) jam.broadcast(s, user); // mesma faixa: já alinhado, só repassa
+  }
 }
 
 $('btn-jam').addEventListener('click', () => {
@@ -1041,3 +1071,4 @@ $('me').addEventListener('click', () => {
   fillRange($('volume'));
   window.api.bgGet().then(setBackground).catch(() => {});
 })();
+
